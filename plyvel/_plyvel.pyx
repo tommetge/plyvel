@@ -585,6 +585,7 @@ cdef class WriteBatch:
 
 cdef enum IteratorState:
     BEFORE_START
+    BEFORE_START_ALREADY_POSITIONED
     AFTER_STOP
     IN_BETWEEN
     IN_BETWEEN_ALREADY_POSITIONED
@@ -746,6 +747,45 @@ cdef class Iterator:
             return value
         return None
 
+    def valid(self):
+        """Return the current iterator's validity"""
+        if self._iter is NULL:
+            raise RuntimeError("Cannot operate on closed LevelDB database")
+
+        return self._iter.Valid()
+
+    def key(self):
+        """Return the current iterator key or None."""
+        if self._iter is NULL:
+            raise RuntimeError("Cannot operate on closed LevelDB database")
+
+        if not self.valid():
+            return None
+        out = self.current()
+        if out is None:
+            return None
+        if self.include_key and self.include_value:
+            return out[0]
+        if self.include_key:
+            return out
+        return None
+
+    def value(self):
+        """Return the current iterator value or None."""
+        if self._iter is NULL:
+            raise RuntimeError("Cannot operate on closed LevelDB database")
+
+        if not self.valid():
+            return None
+        out = self.current()
+        if out is None:
+            return None
+        if self.include_key and self.include_value:
+            return out[1]
+        if self.include_value:
+            return out
+        return None
+
     def __next__(self):
         """Return the next iterator entry.
 
@@ -774,6 +814,20 @@ cdef class Iterator:
                 self.state = AFTER_STOP
                 raise StopIteration
         elif self.state == IN_BETWEEN_ALREADY_POSITIONED:
+            self.state = IN_BETWEEN
+        elif self.state == BEFORE_START_ALREADY_POSITIONED:
+            if not self._iter.Valid():
+                # Iterator is empty
+                raise StopIteration
+            if self.start is not None and not self.include_start:
+                # Start key is excluded, so skip past it if the db
+                # contains it.
+                if self.comparator.Compare(self._iter.key(),
+                                           self.start_slice) == 0:
+                    with nogil:
+                        self._iter.Next()
+                    if not self._iter.Valid():
+                        raise StopIteration
             self.state = IN_BETWEEN
         elif self.state == BEFORE_START:
             if self.start is None:
@@ -824,6 +878,8 @@ cdef class Iterator:
                 self.state = BEFORE_START
                 raise StopIteration
             raise_for_status(self._iter.status())
+        elif self.state == BEFORE_START_ALREADY_POSITIONED:
+            raise StopIteration
         elif self.state == BEFORE_START:
             raise StopIteration
         elif self.state == AFTER_STOP:
@@ -897,6 +953,13 @@ cdef class Iterator:
         if self._iter is NULL:
             raise RuntimeError("Cannot operate on closed LevelDB database")
 
+        if self.start is None:
+            with nogil:
+                self._iter.SeekToFirst()
+        else:
+            with nogil:
+                self._iter.Seek(self.start_slice)
+
         self.state = BEFORE_START
 
     def seek_to_stop(self):
@@ -931,6 +994,20 @@ cdef class Iterator:
 
         self.state = IN_BETWEEN_ALREADY_POSITIONED
         raise_for_status(self._iter.status())
+
+    def step_forward(self):
+        if self._iter is NULL:
+            raise RuntimeError("Cannot operate on closed LevelDB database")
+
+        with nogil:
+            self._iter.Next()
+
+    def step_backward(self):
+        if self._iter is NULL:
+            raise RuntimeError("Cannot operate on closed LevelDB database")
+
+        with nogil:
+            self._iter.Prev()
 
 
 #
