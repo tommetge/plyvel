@@ -960,7 +960,7 @@ cdef class Iterator:
             with nogil:
                 self._iter.Seek(self.start_slice)
 
-        self.state = BEFORE_START
+        self.state = BEFORE_START_ALREADY_POSITIONED
 
     def seek_to_stop(self):
         if self._iter is NULL:
